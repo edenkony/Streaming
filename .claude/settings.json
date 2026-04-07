@@ -1,1 +1,16 @@
-{}
+{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cd /home/user/Streaming && BRANCH=claude/hebrew-iptv-player-szWb2 && if ! git diff --quiet || ! git diff --cached --quiet || [ -n \"$(git ls-files --others --exclude-standard 2>/dev/null)\" ]; then git add . && git commit -m 'auto-commit: session changes' && git push -u origin \"$BRANCH\"; fi 2>/dev/null || true",
+            "timeout": 30,
+            "statusMessage": "דוחף שינויים ל-GitHub..."
+          }
+        ]
+      }
+    ]
+  }
+}
