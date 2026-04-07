@@ -9,11 +9,27 @@ import CountryFilter from './components/CountryFilter';
 import Player from './components/Player';
 import AuthPage from './components/AuthPage';
 import UserMenu from './components/UserMenu';
+import DebugPage from './components/DebugPage';
 import './App.css';
 
 const PAGE_SIZE = 60;
 
+// Supabase is optional — if env vars are missing, skip auth gate
+const SUPABASE_CONFIGURED =
+  Boolean(import.meta.env.VITE_SUPABASE_URL) &&
+  Boolean(import.meta.env.VITE_SUPABASE_ANON_KEY);
+
+// /debug route (works with any base path)
+const IS_DEBUG = window.location.pathname.replace(/\/$/, '').endsWith('/debug');
+
 export default function App() {
+  // Always render debug page regardless of auth
+  if (IS_DEBUG) return <DebugPage />;
+
+  return <MainApp />;
+}
+
+function MainApp() {
   const { user, authLoading, signOut } = useAuth();
 
   const {
@@ -24,11 +40,11 @@ export default function App() {
 
   const { favorites, toggle: toggleFav, isFavorite, favLoading } = useFavorites(user);
 
-  const [activeCategory, setActiveCategory] = useState('__initial__');
-  const [searchQuery,    setSearchQuery]    = useState('');
-  const [selectedCountry,setSelectedCountry]= useState('');
-  const [selectedChannel,setSelectedChannel]= useState(null);
-  const [page,           setPage]           = useState(1);
+  const [activeCategory,  setActiveCategory]  = useState('__initial__');
+  const [searchQuery,     setSearchQuery]     = useState('');
+  const [selectedCountry, setSelectedCountry] = useState('');
+  const [selectedChannel, setSelectedChannel] = useState(null);
+  const [page,            setPage]            = useState(1);
 
   // Load category data when active category changes
   useEffect(() => {
@@ -67,8 +83,8 @@ export default function App() {
   const paginated = useMemo(() => filtered.slice(0, page * PAGE_SIZE), [filtered, page]);
   const hasMore   = paginated.length < filtered.length;
 
-  // ── Auth loading ──
-  if (authLoading) {
+  // ── Auth loading (only when Supabase is configured) ──
+  if (SUPABASE_CONFIGURED && authLoading) {
     return (
       <div className="loading-screen" dir="rtl">
         <div className="loading-logo">📺</div>
@@ -80,8 +96,8 @@ export default function App() {
     );
   }
 
-  // ── Auth gate ──
-  if (!user) return <AuthPage />;
+  // ── Auth gate (only when Supabase is configured) ──
+  if (SUPABASE_CONFIGURED && !user) return <AuthPage />;
 
   // ── Data loading ──
   if (initialLoading) {
@@ -122,11 +138,15 @@ export default function App() {
           <div className="header-stats">
             {channels.length.toLocaleString('he-IL')} ערוצים
           </div>
-          <UserMenu
-            user={user}
-            onSignOut={signOut}
-            onShowFavorites={handleShowFavorites}
-          />
+          {/* Show user menu only when Supabase is configured and user is logged in */}
+          {SUPABASE_CONFIGURED && user && (
+            <UserMenu
+              user={user}
+              onSignOut={signOut}
+              onShowFavorites={handleShowFavorites}
+            />
+          )}
+          <a href="debug" className="debug-link" title="Diagnostic">🔧</a>
         </div>
       </header>
 
