@@ -1,65 +1,90 @@
-import { useState, useMemo, useCallback } from 'react';
+import { useState, useMemo, useCallback, useEffect } from 'react';
 import { useIPTVData } from './hooks/useIPTVData';
 import { useFavorites } from './hooks/useFavorites';
+import { useAuth } from './hooks/useAuth';
 import ChannelCard from './components/ChannelCard';
 import CategoryTabs from './components/CategoryTabs';
 import SearchBar from './components/SearchBar';
 import CountryFilter from './components/CountryFilter';
 import Player from './components/Player';
+import AuthPage from './components/AuthPage';
+import UserMenu from './components/UserMenu';
 import './App.css';
 
 const PAGE_SIZE = 60;
 
 export default function App() {
-  const { channels, categories, countries, loading, error, progress } = useIPTVData();
-  const { favorites, toggle: toggleFav, isFavorite } = useFavorites();
+  const { user, authLoading, signOut } = useAuth();
 
-  const [activeCategory, setActiveCategory] = useState('__all__');
-  const [searchQuery, setSearchQuery] = useState('');
-  const [selectedCountry, setSelectedCountry] = useState('');
-  const [selectedChannel, setSelectedChannel] = useState(null);
-  const [page, setPage] = useState(1);
+  const {
+    channels, categories, countries,
+    initialLoading, categoryLoading, error, progress,
+    loadCategory,
+  } = useIPTVData();
+
+  const { favorites, toggle: toggleFav, isFavorite, favLoading } = useFavorites(user);
+
+  const [activeCategory, setActiveCategory] = useState('__initial__');
+  const [searchQuery,    setSearchQuery]    = useState('');
+  const [selectedCountry,setSelectedCountry]= useState('');
+  const [selectedChannel,setSelectedChannel]= useState(null);
+  const [page,           setPage]           = useState(1);
+
+  // Load category data when active category changes
+  useEffect(() => {
+    if (initialLoading) return;
+    loadCategory(activeCategory, [...favorites]);
+    setPage(1);
+  }, [activeCategory, initialLoading]); // eslint-disable-line
+
+  // Reload favorites tab when favorites list changes
+  useEffect(() => {
+    if (activeCategory === '__fav__' && !initialLoading) {
+      loadCategory('__fav__', [...favorites]);
+    }
+  }, [favorites]); // eslint-disable-line
 
   const handleCategoryChange = useCallback((cat) => {
     setActiveCategory(cat);
-    setPage(1);
+    setSearchQuery('');
+    setSelectedCountry('');
   }, []);
 
-  const handleSearch = useCallback((q) => {
-    setSearchQuery(q);
-    setPage(1);
-  }, []);
-
-  const handleCountry = useCallback((c) => {
-    setSelectedCountry(c);
-    setPage(1);
-  }, []);
+  const handleShowFavorites = useCallback(() => {
+    handleCategoryChange('__fav__');
+  }, [handleCategoryChange]);
 
   const filtered = useMemo(() => {
     let list = channels;
-
-    if (activeCategory === '__fav__') {
-      list = list.filter((c) => isFavorite(c.id));
-    } else if (activeCategory !== '__all__') {
-      list = list.filter((c) => c.categories.includes(activeCategory));
-    }
-
-    if (selectedCountry) {
-      list = list.filter((c) => c.country === selectedCountry);
-    }
-
+    if (selectedCountry) list = list.filter((c) => c.country === selectedCountry);
     if (searchQuery.trim()) {
       const q = searchQuery.trim().toLowerCase();
       list = list.filter((c) => c.name.toLowerCase().includes(q));
     }
-
     return list;
-  }, [channels, activeCategory, selectedCountry, searchQuery, isFavorite]);
+  }, [channels, selectedCountry, searchQuery]);
 
   const paginated = useMemo(() => filtered.slice(0, page * PAGE_SIZE), [filtered, page]);
-  const hasMore = paginated.length < filtered.length;
+  const hasMore   = paginated.length < filtered.length;
 
-  if (loading) {
+  // ── Auth loading ──
+  if (authLoading) {
+    return (
+      <div className="loading-screen" dir="rtl">
+        <div className="loading-logo">📺</div>
+        <div className="loading-title">טוען...</div>
+        <div className="progress-bar-wrap">
+          <div className="progress-bar-fill" style={{ width: '30%' }} />
+        </div>
+      </div>
+    );
+  }
+
+  // ── Auth gate ──
+  if (!user) return <AuthPage />;
+
+  // ── Data loading ──
+  if (initialLoading) {
     return (
       <div className="loading-screen" dir="rtl">
         <div className="loading-logo">📺</div>
@@ -78,12 +103,12 @@ export default function App() {
         <div className="error-icon">⚠️</div>
         <div className="error-title">שגיאה בטעינת הנתונים</div>
         <div className="error-msg">{error}</div>
-        <button className="btn-retry" onClick={() => window.location.reload()}>
-          נסה שוב
-        </button>
+        <button className="btn-retry" onClick={() => window.location.reload()}>נסה שוב</button>
       </div>
     );
   }
+
+  const isInitialTab = activeCategory === '__initial__';
 
   return (
     <div className="app" dir="rtl">
@@ -93,15 +118,22 @@ export default function App() {
           <span className="brand-icon">📺</span>
           <span className="brand-name">IPTV ישראל</span>
         </div>
-        <div className="header-stats">
-          {channels.length.toLocaleString('he-IL')} ערוצים זמינים
+        <div className="header-end">
+          <div className="header-stats">
+            {channels.length.toLocaleString('he-IL')} ערוצים
+          </div>
+          <UserMenu
+            user={user}
+            onSignOut={signOut}
+            onShowFavorites={handleShowFavorites}
+          />
         </div>
       </header>
 
       {/* Toolbar */}
       <div className="toolbar">
-        <SearchBar value={searchQuery} onChange={handleSearch} />
-        <CountryFilter countries={countries} value={selectedCountry} onChange={handleCountry} />
+        <SearchBar value={searchQuery} onChange={(q) => { setSearchQuery(q); setPage(1); }} />
+        <CountryFilter countries={countries} value={selectedCountry} onChange={(c) => { setSelectedCountry(c); setPage(1); }} />
       </div>
 
       {/* Category tabs */}
@@ -110,51 +142,70 @@ export default function App() {
         active={activeCategory}
         onChange={handleCategoryChange}
         favCount={favorites.size}
+        isInitialTab={isInitialTab}
       />
 
-      {/* Results count */}
-      <div className="results-count">
-        {filtered.length === 0
-          ? 'לא נמצאו ערוצים'
-          : `${filtered.length.toLocaleString('he-IL')} ערוצים`}
-        {searchQuery && ` עבור "${searchQuery}"`}
-      </div>
-
-      {/* Grid */}
-      {filtered.length === 0 ? (
-        <div className="empty-state">
-          <div className="empty-icon">📭</div>
-          <div>אין ערוצים התואמים את החיפוש שלך</div>
+      {/* Category loading spinner */}
+      {(categoryLoading || favLoading) && (
+        <div className="category-loading">
+          <div className="spinner" />
+          <span>טוען ערוצים...</span>
         </div>
-      ) : (
-        <>
-          <div className="channel-grid">
-            {paginated.map((ch) => (
-              <ChannelCard
-                key={ch.id}
-                channel={ch}
-                isFavorite={isFavorite(ch.id)}
-                onToggleFavorite={toggleFav}
-                onClick={setSelectedChannel}
-              />
-            ))}
-          </div>
-          {hasMore && (
-            <div className="load-more-wrap">
-              <button className="btn-load-more" onClick={() => setPage((p) => p + 1)}>
-                טען עוד ({filtered.length - paginated.length} נותרו)
-              </button>
-            </div>
-          )}
-        </>
       )}
 
-      {/* Player modal */}
+      {/* Results count */}
+      {!categoryLoading && (
+        <div className="results-count">
+          {filtered.length === 0
+            ? 'לא נמצאו ערוצים'
+            : `${filtered.length.toLocaleString('he-IL')} ערוצים`}
+          {searchQuery && ` עבור "${searchQuery}"`}
+          {isInitialTab && !searchQuery && !selectedCountry && (
+            <span className="results-badge">ספורט + ישראל</span>
+          )}
+        </div>
+      )}
+
+      {/* Grid */}
+      {!categoryLoading && (
+        filtered.length === 0 ? (
+          <div className="empty-state">
+            <div className="empty-icon">
+              {activeCategory === '__fav__' ? '★' : '📭'}
+            </div>
+            <div>
+              {activeCategory === '__fav__'
+                ? 'עוד לא הוספת ערוצים למועדפים'
+                : 'אין ערוצים התואמים את החיפוש שלך'}
+            </div>
+          </div>
+        ) : (
+          <>
+            <div className="channel-grid">
+              {paginated.map((ch) => (
+                <ChannelCard
+                  key={ch.id}
+                  channel={ch}
+                  isFavorite={isFavorite(ch.id)}
+                  onToggleFavorite={toggleFav}
+                  onClick={setSelectedChannel}
+                />
+              ))}
+            </div>
+            {hasMore && (
+              <div className="load-more-wrap">
+                <button className="btn-load-more" onClick={() => setPage((p) => p + 1)}>
+                  טען עוד ({filtered.length - paginated.length} נותרו)
+                </button>
+              </div>
+            )}
+          </>
+        )
+      )}
+
+      {/* Player */}
       {selectedChannel && (
-        <Player
-          channel={selectedChannel}
-          onClose={() => setSelectedChannel(null)}
-        />
+        <Player channel={selectedChannel} onClose={() => setSelectedChannel(null)} />
       )}
     </div>
   );
