@@ -3,230 +3,267 @@ import { useIPTVData } from './hooks/useIPTVData';
 import { useFavorites } from './hooks/useFavorites';
 import { useAuth } from './hooks/useAuth';
 import ChannelCard from './components/ChannelCard';
-import CategoryTabs from './components/CategoryTabs';
-import SearchBar from './components/SearchBar';
-import CountryFilter from './components/CountryFilter';
+import ChannelRow from './components/ChannelRow';
+import CategoryTabs, { TABS } from './components/CategoryTabs';
+import CountrySidebar from './components/CountrySidebar';
 import Player from './components/Player';
 import AuthPage from './components/AuthPage';
 import UserMenu from './components/UserMenu';
 import DebugPage from './components/DebugPage';
 import './App.css';
 
-const PAGE_SIZE = 60;
+const PAGE_SIZE = 50;
 
-// Supabase is optional — if env vars are missing, skip auth gate
 const SUPABASE_CONFIGURED =
   Boolean(import.meta.env.VITE_SUPABASE_URL) &&
   Boolean(import.meta.env.VITE_SUPABASE_ANON_KEY);
 
-// /debug route (works with any base path)
 const IS_DEBUG = window.location.pathname.replace(/\/$/, '').endsWith('/debug');
 
-export default function App() {
-  // Always render debug page regardless of auth
-  if (IS_DEBUG) return <DebugPage />;
+// Category → row title map for Israel home view
+const IL_ROW_TITLES = {
+  sports:        'ספורט',
+  news:          'חדשות',
+  entertainment: 'בידור',
+  music:         'מוזיקה',
+  general:       'כללי',
+  movies:        'סרטים',
+  kids:          'ילדים',
+  documentary:   'תיעודי',
+  business:      'עסקים',
+};
 
+export default function App() {
+  if (IS_DEBUG) return <DebugPage />;
   return <MainApp />;
 }
 
 function MainApp() {
   const { user, authLoading, signOut } = useAuth();
+  const { allChannels, categories, countries, loading, error, progress } = useIPTVData();
+  const { favorites, toggle: toggleFav, isFavorite } = useFavorites(user);
 
-  const {
-    channels, categories, countries,
-    initialLoading, categoryLoading, error, progress,
-    loadCategory,
-  } = useIPTVData();
-
-  const { favorites, toggle: toggleFav, isFavorite, favLoading } = useFavorites(user);
-
-  const [activeCategory,  setActiveCategory]  = useState('__initial__');
+  const [activeTab,       setActiveTab]       = useState('IL');
   const [searchQuery,     setSearchQuery]     = useState('');
   const [selectedCountry, setSelectedCountry] = useState('');
+  const [sidebarOpen,     setSidebarOpen]     = useState(false);
   const [selectedChannel, setSelectedChannel] = useState(null);
   const [page,            setPage]            = useState(1);
 
-  // Load category data when active category changes
-  useEffect(() => {
-    if (initialLoading) return;
-    loadCategory(activeCategory, [...favorites]);
-    setPage(1);
-  }, [activeCategory, initialLoading]); // eslint-disable-line
+  // Reset page on tab/search/country change
+  useEffect(() => { setPage(1); }, [activeTab, searchQuery, selectedCountry]);
 
-  // Reload favorites tab when favorites list changes
-  useEffect(() => {
-    if (activeCategory === '__fav__' && !initialLoading) {
-      loadCategory('__fav__', [...favorites]);
-    }
-  }, [favorites]); // eslint-disable-line
-
-  const handleCategoryChange = useCallback((cat) => {
-    setActiveCategory(cat);
+  const handleTabChange = useCallback(tab => {
+    setActiveTab(tab);
     setSearchQuery('');
     setSelectedCountry('');
+    setSidebarOpen(false);
   }, []);
 
-  const handleShowFavorites = useCallback(() => {
-    handleCategoryChange('__fav__');
-  }, [handleCategoryChange]);
+  // ── Filtered channels for current tab ──
+  const tabChannels = useMemo(() => {
+    let list = allChannels;
 
-  const filtered = useMemo(() => {
-    let list = channels;
-    if (selectedCountry) list = list.filter((c) => c.country === selectedCountry);
+    if (activeTab === '__fav__') {
+      list = list.filter(c => isFavorite(c.id));
+    } else if (activeTab === 'IL') {
+      list = list.filter(c => c.country === 'IL');
+    } else {
+      // category tab
+      list = list.filter(c => c.categories.includes(activeTab));
+    }
+
+    if (selectedCountry) list = list.filter(c => c.country === selectedCountry);
+
     if (searchQuery.trim()) {
       const q = searchQuery.trim().toLowerCase();
-      list = list.filter((c) => c.name.toLowerCase().includes(q));
+      list = list.filter(c => c.name.toLowerCase().includes(q));
     }
+
     return list;
-  }, [channels, selectedCountry, searchQuery]);
+  }, [allChannels, activeTab, selectedCountry, searchQuery, isFavorite]);
 
-  const paginated = useMemo(() => filtered.slice(0, page * PAGE_SIZE), [filtered, page]);
-  const hasMore   = paginated.length < filtered.length;
+  // ── Israel home rows (Netflix style) ──
+  const ilRows = useMemo(() => {
+    if (activeTab !== 'IL' || searchQuery.trim() || selectedCountry) return null;
+    const ilChannels = allChannels.filter(c => c.country === 'IL');
 
-  // ── Auth loading (only when Supabase is configured) ──
-  if (SUPABASE_CONFIGURED && authLoading) {
-    return (
-      <div className="loading-screen" dir="rtl">
-        <div className="loading-logo">📺</div>
-        <div className="loading-title">טוען...</div>
-        <div className="progress-bar-wrap">
-          <div className="progress-bar-fill" style={{ width: '30%' }} />
-        </div>
-      </div>
-    );
-  }
+    return Object.entries(IL_ROW_TITLES)
+      .map(([catId, title]) => ({
+        catId,
+        title,
+        channels: ilChannels.filter(c => c.categories.includes(catId)),
+      }))
+      .filter(row => row.channels.length > 0);
+  }, [activeTab, allChannels, searchQuery, selectedCountry]);
 
-  // ── Auth gate (only when Supabase is configured) ──
+  // ── Grid pagination ──
+  const paginated = useMemo(
+    () => tabChannels.slice(0, page * PAGE_SIZE),
+    [tabChannels, page]
+  );
+  const hasMore = paginated.length < tabChannels.length;
+
+  // ── Auth loading ──
+  if (SUPABASE_CONFIGURED && authLoading) return <Loader progress={30} />;
   if (SUPABASE_CONFIGURED && !user) return <AuthPage />;
-
-  // ── Data loading ──
-  if (initialLoading) {
-    return (
-      <div className="loading-screen" dir="rtl">
-        <div className="loading-logo">📺</div>
-        <div className="loading-title">טוען ערוצים...</div>
-        <div className="progress-bar-wrap">
-          <div className="progress-bar-fill" style={{ width: `${progress}%` }} />
-        </div>
-        <div className="loading-sub">מאחזר נתוני ערוצים מ-IPTV-org</div>
-      </div>
-    );
-  }
+  if (loading) return <Loader progress={progress} />;
 
   if (error) {
     return (
-      <div className="error-screen" dir="rtl">
-        <div className="error-icon">⚠️</div>
-        <div className="error-title">שגיאה בטעינת הנתונים</div>
-        <div className="error-msg">{error}</div>
-        <button className="btn-retry" onClick={() => window.location.reload()}>נסה שוב</button>
+      <div className="nf-error" dir="rtl">
+        <div className="nf-error-icon">⚠️</div>
+        <div className="nf-error-title">שגיאה בטעינת הנתונים</div>
+        <div className="nf-error-msg">{error}</div>
+        <button className="nf-btn-primary" onClick={() => window.location.reload()}>נסה שוב</button>
       </div>
     );
   }
 
-  const isInitialTab = activeCategory === '__initial__';
+  const isILHome = activeTab === 'IL' && !searchQuery.trim() && !selectedCountry;
 
   return (
-    <div className="app" dir="rtl">
-      {/* Header */}
-      <header className="app-header">
-        <div className="header-brand">
-          <span className="brand-icon">📺</span>
-          <span className="brand-name">IPTV ישראל</span>
+    <div className="nf-app" dir="rtl">
+
+      {/* ── Header ── */}
+      <header className="nf-header">
+        <div className="nf-header-start">
+          <span className="nf-logo">📺 IPTV</span>
+          <button
+            className="nf-sidebar-toggle"
+            onClick={() => setSidebarOpen(o => !o)}
+            aria-label="סינון מדינות"
+            title="סינון לפי מדינה"
+          >
+            🌍
+          </button>
         </div>
-        <div className="header-end">
-          <div className="header-stats">
-            {channels.length.toLocaleString('he-IL')} ערוצים
-          </div>
-          {/* Show user menu only when Supabase is configured and user is logged in */}
-          {SUPABASE_CONFIGURED && user && (
-            <UserMenu
-              user={user}
-              onSignOut={signOut}
-              onShowFavorites={handleShowFavorites}
-            />
+
+        <div className="nf-search-wrap">
+          <span className="nf-search-icon">🔍</span>
+          <input
+            type="search"
+            className="nf-search"
+            placeholder="חיפוש ערוץ..."
+            value={searchQuery}
+            onChange={e => setSearchQuery(e.target.value)}
+            dir="rtl"
+            aria-label="חיפוש"
+          />
+          {searchQuery && (
+            <button className="nf-search-clear" onClick={() => setSearchQuery('')}>✕</button>
           )}
-          <a href="debug" className="debug-link" title="Diagnostic">🔧</a>
+        </div>
+
+        <div className="nf-header-end">
+          <span className="nf-channel-count">{allChannels.length.toLocaleString('he-IL')} ערוצים</span>
+          {SUPABASE_CONFIGURED && user && (
+            <UserMenu user={user} onSignOut={signOut} onShowFavorites={() => handleTabChange('__fav__')} />
+          )}
+          <a href="debug" className="nf-debug-link" title="Diagnostic">🔧</a>
         </div>
       </header>
 
-      {/* Toolbar */}
-      <div className="toolbar">
-        <SearchBar value={searchQuery} onChange={(q) => { setSearchQuery(q); setPage(1); }} />
-        <CountryFilter countries={countries} value={selectedCountry} onChange={(c) => { setSelectedCountry(c); setPage(1); }} />
-      </div>
+      {/* ── Tabs ── */}
+      <CategoryTabs active={activeTab} onChange={handleTabChange} favCount={favorites.size} />
 
-      {/* Category tabs */}
-      <CategoryTabs
-        categories={categories}
-        active={activeCategory}
-        onChange={handleCategoryChange}
-        favCount={favorites.size}
-        isInitialTab={isInitialTab}
-      />
+      {/* ── Body ── */}
+      <div className="nf-body">
 
-      {/* Category loading spinner */}
-      {(categoryLoading || favLoading) && (
-        <div className="category-loading">
-          <div className="spinner" />
-          <span>טוען ערוצים...</span>
-        </div>
-      )}
+        {/* Country sidebar */}
+        <CountrySidebar
+          countries={countries}
+          selected={selectedCountry}
+          onChange={c => { setSelectedCountry(c); setSidebarOpen(false); }}
+          open={sidebarOpen}
+          onToggle={() => setSidebarOpen(o => !o)}
+        />
 
-      {/* Results count */}
-      {!categoryLoading && (
-        <div className="results-count">
-          {filtered.length === 0
-            ? 'לא נמצאו ערוצים'
-            : `${filtered.length.toLocaleString('he-IL')} ערוצים`}
-          {searchQuery && ` עבור "${searchQuery}"`}
-          {isInitialTab && !searchQuery && !selectedCountry && (
-            <span className="results-badge">ספורט + ישראל</span>
-          )}
-        </div>
-      )}
+        {/* Main content */}
+        <main className="nf-main">
 
-      {/* Grid */}
-      {!categoryLoading && (
-        filtered.length === 0 ? (
-          <div className="empty-state">
-            <div className="empty-icon">
-              {activeCategory === '__fav__' ? '★' : '📭'}
-            </div>
-            <div>
-              {activeCategory === '__fav__'
-                ? 'עוד לא הוספת ערוצים למועדפים'
-                : 'אין ערוצים התואמים את החיפוש שלך'}
-            </div>
-          </div>
-        ) : (
-          <>
-            <div className="channel-grid">
-              {paginated.map((ch) => (
-                <ChannelCard
-                  key={ch.id}
-                  channel={ch}
-                  isFavorite={isFavorite(ch.id)}
+          {/* Israel home — Netflix rows */}
+          {isILHome && ilRows && (
+            <div className="nf-rows-container">
+              {ilRows.map(row => (
+                <ChannelRow
+                  key={row.catId}
+                  title={row.title}
+                  channels={row.channels}
+                  isFavorite={isFavorite}
                   onToggleFavorite={toggleFav}
                   onClick={setSelectedChannel}
                 />
               ))}
             </div>
-            {hasMore && (
-              <div className="load-more-wrap">
-                <button className="btn-load-more" onClick={() => setPage((p) => p + 1)}>
-                  טען עוד ({filtered.length - paginated.length} נותרו)
-                </button>
+          )}
+
+          {/* Grid view — all other tabs or when searching */}
+          {(!isILHome || searchQuery.trim() || selectedCountry) && (
+            <>
+              <div className="nf-grid-header">
+                <span className="nf-grid-count">
+                  {tabChannels.length === 0
+                    ? 'לא נמצאו ערוצים'
+                    : `${tabChannels.length.toLocaleString('he-IL')} ערוצים`}
+                  {searchQuery && ` עבור "${searchQuery}"`}
+                </span>
               </div>
-            )}
-          </>
-        )
-      )}
+
+              {tabChannels.length === 0 ? (
+                <div className="nf-empty">
+                  <div className="nf-empty-icon">{activeTab === '__fav__' ? '★' : '📭'}</div>
+                  <div>
+                    {activeTab === '__fav__'
+                      ? 'עוד לא הוספת ערוצים למועדפים'
+                      : 'אין ערוצים התואמים את החיפוש'}
+                  </div>
+                </div>
+              ) : (
+                <>
+                  <div className="nf-grid">
+                    {paginated.map(ch => (
+                      <ChannelCard
+                        key={ch.id}
+                        channel={ch}
+                        isFavorite={isFavorite(ch.id)}
+                        onToggleFavorite={toggleFav}
+                        onClick={setSelectedChannel}
+                      />
+                    ))}
+                  </div>
+                  {hasMore && (
+                    <div className="nf-load-more">
+                      <button className="nf-btn-outline" onClick={() => setPage(p => p + 1)}>
+                        טען עוד ({tabChannels.length - paginated.length} נותרו)
+                      </button>
+                    </div>
+                  )}
+                </>
+              )}
+            </>
+          )}
+        </main>
+      </div>
 
       {/* Player */}
       {selectedChannel && (
         <Player channel={selectedChannel} onClose={() => setSelectedChannel(null)} />
       )}
+    </div>
+  );
+}
+
+function Loader({ progress }) {
+  return (
+    <div className="nf-loader" dir="rtl">
+      <div className="nf-loader-logo">📺</div>
+      <div className="nf-loader-title">
+        {progress < 40 ? 'טוען...' : 'מעבד ערוצים...'}
+      </div>
+      <div className="nf-progress-wrap">
+        <div className="nf-progress-fill" style={{ width: `${progress}%` }} />
+      </div>
     </div>
   );
 }
